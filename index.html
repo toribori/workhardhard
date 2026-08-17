@@ -423,6 +423,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
       <input type="text" id="quick-in" placeholder="예: 7/28 오후 교픽 · 8/15 광복절 · 8/4 1000 임플 어시" oninput="quickPreview()" onkeydown="if(event.key==='Enter')quickAdd()">
       <button class="btn" onclick="quickAdd()">추가</button>
     </div>
+    <textarea id="quick-memo" placeholder="상세 메모 (선택) — 준비물·주의사항·인계 등" rows="2" style="width:100%;margin-top:7px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box"></textarea>
     <div id="quick-preview"></div>
     <div id="quick-depts" style="display:flex;gap:5px;overflow-x:auto;padding:8px 0 2px;-webkit-overflow-scrolling:touch"></div>
     <p class="hint" style="margin-top:4px">교픽·마이너·외래·물치실 등은 오전/오후 <b>나절 통짜</b>로, 공휴일·메이저는 <b>하루 통짜</b>로 자동 인식돼요. <b>과가 자동으로 안 잡히거나 바꾸고 싶으면 아래 칩을 눌러 지정</b> — 안 골라도 그대로 추가돼요.</p>
@@ -753,7 +754,7 @@ const BASE_SCHED={"v":2,"events":[]}; /* 공유판: 개인 일정 시드 없음 
 function txtOn(hex){try{const x=(hex||"").replace("#","");const r=parseInt(x.substr(0,2),16),g=parseInt(x.substr(2,2),16),b=parseInt(x.substr(4,2),16);return (0.299*r+0.587*g+0.114*b)/255>0.62?"#1E2823":"#fff";}catch(e){return "#fff";}}
 const DEPT_COLOR={"소치":"#EE7A1A","내과":"#C29B00","교정":"#2E9E44","치주":"#12A5B0","보존":"#3D7BE0","보철":"#23408F","외과":"#A8262A","영상":"#4F7FA8","병리":"#B0637C","원진실":"#9A5FD6","관악":"#6B2D8F","공통":"#5C6B73","기타":"#8A938D"};
 const KEY="wonnae-share-v1";
-const BUILD_ID="5";   /* 🎁 공유판(배포용) 빌드 — 새 파일마다 +1 */
+const BUILD_ID="7";   /* 🎁 공유판(배포용) 빌드 — 새 파일마다 +1 */
 function esc(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 /* 저장 어댑터: 클로드 앱/웹에서 열면 계정 저장소(폰·PC 자동 동기화), 
    파일을 따로 브라우저로 열면 그 기기 localStorage(비동기화)로 폴백 */
@@ -1075,9 +1076,18 @@ async function load(){
     }
   }catch(e){}},900);
   svlog("load:"+dataOrigin+" cands:"+v3cands.length);
-  /* 🆕 새 버전 감지: 부팅 3초 후 1회 + 화면 복귀 때마다 (다른 기기/내가 배포한 최신본 알림) */
-  setTimeout(()=>{try{freshCheck();}catch(e){}},3000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden){try{freshCheck();}catch(e){}}});
+  /* ☁️ GitHub 설정 복원 — 저장된 repo·토큰을 입력칸에 채우고 상태 표시, 연결돼 있으면 자동 수신 */
+  try{
+    if(ghCfg){tcSet&&tcSet("gh-repo",ghCfg.repo||"");tcSet&&tcSet("gh-branch",ghCfg.branch||"main");tcSet&&tcSet("gh-token",ghCfg.token||"");}
+    ghStatus();
+    if(ghOn())setTimeout(()=>pullLatest("gh-boot"),900);
+  }catch(e){}
+  /* 🆕 새 버전 감지: 부팅 3초 후 + 화면 복귀 + 5분 주기 */
+  try{
+    setTimeout(()=>{try{freshCheck();}catch(e){}},3000);
+    setInterval(()=>{try{freshCheck();}catch(e){}},300000);
+    document.addEventListener("visibilitychange",()=>{if(!document.hidden){try{freshCheck();}catch(e){}}});
+  }catch(e){}
 }
 /* ═══ 저장 상태 상시 표시 + 진단 ═══ */
 /* ═══ 버전·기기 이사 도우미 — 새 HTML 버전은 저장공간이 새로 시작되므로 복사→붙여넣기가 공식 이동 경로 ═══ */
@@ -1176,26 +1186,35 @@ async function deployCommit(txt){
   const st=document.getElementById("gh-deploy-status");
   const say=s=>{if(st)st.innerHTML=s;};
   say("⏳ 배포 중…");
+  const repo=ghCfg.repo, branch=ghCfg.branch||"main";
+  const api="https://api.github.com/repos/"+repo;
+  const H=ghHdr();
+  const JH=Object.assign({"Content-Type":"application/json"},H);
+  const jf=async(u,o)=>{const r=await fetch(u,o);if(!r.ok){let d="";try{d=(await r.json()).message||"";}catch(e){}throw new Error((o&&o.method||"GET")+" "+r.status+(d?" — "+d:""));}return r.json();};
   try{
-    let sha=null;
-    try{
-      const r0=await fetch(ghUrlPath("index.html")+"?ref="+(ghCfg.branch||"main")+"&t="+Date.now(),{headers:ghHdr(),cache:"no-store"});
-      if(r0.ok){const j=await r0.json();sha=j.sha;}
-    }catch(e){}
-    const body={message:"deploy "+new Date().toISOString().slice(5,16).replace("T"," "),content:b64e(txt),branch:ghCfg.branch||"main"};
-    if(sha)body.sha=sha;
-    let r=await fetch(ghUrlPath("index.html"),{method:"PUT",headers:Object.assign({"Content-Type":"application/json"},ghHdr()),body:JSON.stringify(body)});
-    if(r.status===409||r.status===422){
-      const r1=await fetch(ghUrlPath("index.html")+"?ref="+(ghCfg.branch||"main")+"&t="+Date.now(),{headers:ghHdr(),cache:"no-store"});
-      if(r1.ok){const j1=await r1.json();body.sha=j1.sha;
-        r=await fetch(ghUrlPath("index.html"),{method:"PUT",headers:Object.assign({"Content-Type":"application/json"},ghHdr()),body:JSON.stringify(body)});}
-    }
-    if(!r.ok)throw new Error("PUT "+r.status);
+    /* ── Git Data API: 파일 크기 제한 없음(≤100MB). Contents API의 1MB 한계 회피 ── */
+    /* 1) 브랜치 최신 커밋 SHA */
+    const ref=await jf(api+"/git/ref/heads/"+encodeURIComponent(branch)+"?t="+Date.now(),{headers:H,cache:"no-store"});
+    const baseCommit=ref.object.sha;
+    /* 2) 그 커밋의 트리 SHA */
+    const commitObj=await jf(api+"/git/commits/"+baseCommit,{headers:H,cache:"no-store"});
+    const baseTree=commitObj.tree.sha;
+    say("⏳ 배포 중… (1/3 업로드)");
+    /* 3) blob 생성 (base64) — 대용량 안전 */
+    const blob=await jf(api+"/git/blobs",{method:"POST",headers:JH,body:JSON.stringify({content:b64e(txt),encoding:"base64"})});
+    say("⏳ 배포 중… (2/3 트리)");
+    /* 4) 새 트리 (index.html → 새 blob) */
+    const tree=await jf(api+"/git/trees",{method:"POST",headers:JH,body:JSON.stringify({base_tree:baseTree,tree:[{path:"index.html",mode:"100644",type:"blob",sha:blob.sha}]})});
+    /* 5) 커밋 생성 */
+    const commit=await jf(api+"/git/commits",{method:"POST",headers:JH,body:JSON.stringify({message:"deploy "+new Date().toISOString().slice(5,16).replace("T"," "),tree:tree.sha,parents:[baseCommit]})});
+    say("⏳ 배포 중… (3/3 반영)");
+    /* 6) 브랜치 ref 이동 */
+    await jf(api+"/git/refs/heads/"+encodeURIComponent(branch),{method:"PATCH",headers:JH,body:JSON.stringify({sha:commit.sha,force:false})});
     say("✅ 배포 완료 "+new Date().toTimeString().slice(0,5)+" — 반영까지 1~2분. <b>🆕 배너가 뜨면 탭</b>하면 캐시 뚫고 즉시 새 버전!");
-    toast("🚀 배포 완료! 🆕 배너를 기다려주세요");try{svlog("deploy↑");}catch(e){}
+    toast("🚀 배포 완료! 🆕 배너를 기다려주세요");svlog("deploy↑");
     let _n=0;const _tm=setInterval(async()=>{_n++;if(await freshCheck()||_n>=18)clearInterval(_tm);},15000);
   }catch(e){
-    say(`<span style="color:var(--red)">⚠ 배포 실패 — ${esc(String(e&&e.message||e))} (토큰 권한·repo 확인)</span>`);
+    say(`<span style="color:var(--red)">⚠ 배포 실패 — ${esc(String(e&&e.message||e))} (토큰 권한·repo·브랜치 확인)</span>`);
     toast("배포 실패 — 상태줄을 확인해주세요");
   }
 }
@@ -1348,6 +1367,7 @@ async function pullLatest(reason){
   try{
     const localAt=Number(S&&S.savedAt||0);
     let remote=null;
+    let ghMerged=false;   /* 이번 pull에서 GitHub 병합을 했으면 로컬 스냅샷 재병합 스킵(구 스냅샷이 최신 클라우드를 밀어내는 것 방지) */
     const valsAll=(await Promise.all([KEY,KEY+"-snap"].map(k=>readAll(k).catch(()=>[])))).flat();
     if(ghOn()&&(reason!=="poll"||Date.now()-ghLast.pull>25000)){
       try{
@@ -1356,7 +1376,7 @@ async function pullLatest(reason){
           if(g.txt&&g.sha&&g.sha!==ghLastSha){
             const o=JSON.parse(g.txt);
             if(o&&o.events!==undefined){
-              const gsig=x=>{try{return JSON.stringify((x.events||[]).map(e=>[e.id,e.status||"",e.time||"",e.title||""]).sort())+"#"+JSON.stringify((x.totals||[]).map(t=>[t.id,(t.visits||[]).length,t.done?1:0,JSON.stringify(t.vmeta||{})]).sort())+"#"+JSON.stringify((x.mini||[]).map(d=>(d.items||[]).map(i=>i.c||0)));}catch(e){return Math.random()+"";}};
+              const gsig=x=>{try{return JSON.stringify((x.events||[]).map(e=>[e.id,e.status||"",e.time||"",e.title||"",e.span||"",e.date||"",e.memo||"",e.dept||""]).sort())+"#"+JSON.stringify((x.totals||[]).map(t=>[t.id,(t.visits||[]).length,t.done?1:0,t.next||"",t.nextT||"",t.nextHidden?1:0,JSON.stringify(t.vmeta||{})]).sort())+"#"+JSON.stringify(Object.keys(x.ocsHi||{}).sort());}catch(e){return Math.random()+"";}};
               const merged=mergeStates(o,S);
               const changedLocal=gsig(merged)!==gsig(S);
               const differsRemote=gsig(merged)!==gsig(o);
@@ -1364,6 +1384,7 @@ async function pullLatest(reason){
               if(!S.mini)S.mini=defaultMini();
               S.totals=S.totals||[];S.events=S.events||[];S.routine=S.routine||{};S.roadmap=S.roadmap||{};S.protoDone=S.protoDone||{};S.ocsHi=S.ocsHi||{};
               ghLastSha=g.sha;
+              ghMerged=true;
               if(dataOrigin==="fresh")dataOrigin="stored";   /* 클라우드 수신 = 실데이터 보유 */
               if(changedLocal){renderAll();_qRestore();updateSvDot&&updateSvDot();toast("☁️ 다른 기기와 동기화했어요");}
               if(differsRemote){S.savedAt=Date.now();await flushSave();}   /* 병합본을 GitHub에도 전파 */
@@ -1374,7 +1395,7 @@ async function pullLatest(reason){
         }
       }catch(e){}
     }
-        {
+    if(!ghMerged){
       for(const v of valsAll){try{const o=JSON.parse(v);
         if(o&&o.events!==undefined){const at=Number(o.savedAt||0);
           if(at<=Date.now()+172800000&&(!remote||at>Number(remote.savedAt||0)))remote=o;}
@@ -1731,9 +1752,12 @@ function quickAdd(){
   if(!p||!p.title||p.title==="(내용 없음)"){toast("내용을 입력해주세요");return;}
   if(quickDeptOverride)p.dept=quickDeptOverride;
   if(p.dept==="기타"&&/^(픽|픽스|스|환|신|신환|재시|어시)$/.test(p.title.trim())){toast("내용이 너무 짧아요 — 과·케이스를 함께 적어주세요");return;}
-  S.events.push({id:Date.now()+Math.random(),status:"plan",kind:guessKind(p.dept,p.title),memo:"",manual:true,u:Date.now(),...p});
+  const memoEl=document.getElementById("quick-memo");
+  const memo=memoEl?memoEl.value.trim():"";
+  S.events.push({id:Date.now()+Math.random(),status:"plan",kind:guessKind(p.dept,p.title),memo:memo,manual:true,u:Date.now(),...p});
   selDate=p.date;calYM={y:+p.date.slice(0,4),m:+p.date.slice(5,7)-1};
   document.getElementById("quick-in").value="";document.getElementById("quick-preview").textContent="";
+  if(memoEl)memoEl.value="";
   quickDeptOverride=null;renderQuickDepts();
   save();refreshAfterEventChange();
   toast(`추가됨: [${p.dept}] ${esc(p.title)}`);
@@ -1825,8 +1849,9 @@ function confirmNextEvent(tid){const t=findT(tid);if(!t||!t.next)return;
     S.events.push({id:Date.now(),date:t.next,dept:t.dept,title,time:t.nextT||null,dur:60,
       memo:pinfo,status:"plan",kind:"etc",span:null,manual:true,u:Date.now()});
   }
-  t.next="";t.nextT="";t.nextU=Date.now();
-  save();renderCalendar();renderDayDetail();syncTotals();
+  /* ★확정해도 다음 내원일은 토탈에 그대로 보존 — 달력엔 실 일정이 떴으니 예상 점선만 숨김(nextHidden) */
+  t.nextHidden=true;t.nextU=Date.now();
+  save(true);refreshAfterEventChange();syncTotals();
   toast(`✔ 확정: ${title}${twin?" — 기존 일정 메모에 환자 추가":" — 일정으로 옮겼어요 (메모에 환자정보)"}`);}
 function nextVirts(ds){return (S.totals||[]).filter(t=>!t.done&&!t.nextHidden&&t.next===ds);}
 function normTime(s){s=String(s||"").trim();if(!s)return"";
@@ -1997,7 +2022,16 @@ function renderCalendar(){
       const evs=evOn(ds).sort((a,b)=>evSortKey(a)-evSortKey(b));
       const fulls=evs.filter(e=>e.span==="full");
       const rest=evs.filter(e=>e.span!=="full");
-      const ups=upOn(ds).filter(u=>MS.has(u)&&!evs.some(e=>e.title.includes(u.pt))&&(!calDeptFilter||calDeptFilter.size===0||calDeptFilter.has(u.dep)));
+      const ups=upOn(ds).filter(u=>{
+        if(!MS.has(u))return false;
+        if(calDeptFilter&&calDeptFilter.size>0&&!calDeptFilter.has(u.dep))return false;
+        const uno=String(u.no||"").replace(/\D/g,"").replace(/^0+/,"");
+        /* 이미 실제 일정에 이 환자가 잡혀 있으면(제목·메모에 이름 또는 번호) 유령칩 제외 */
+        if(evs.some(e=>(e.title&&e.title.includes(u.pt))||(e.memo&&(e.memo.includes(u.pt)||(uno&&e.memo.replace(/\D/g,"").includes(uno))))))return false;
+        /* 이미 예상(다음 내원일) 점선칩이 이 환자로 떠 있으면 유령칩 제외 (중복 방지) */
+        if(nextVirts(ds).some(t=>{const tno=String(t.ptno||"").replace(/\D/g,"").replace(/^0+/,"");return t.pt===u.pt||(tno&&uno&&tno===uno);}))return false;
+        return true;
+      });
       const am=rest.filter(e=>e.span==="am"||(!e.span&&(!e.time||hm2min(e.time)<720)));
       const pm=rest.filter(e=>e.span==="pm"||(!e.span&&e.time&&hm2min(e.time)>=720));
       const amU=ups.filter(u=>!u.t||hm2min(u.t)<720), pmU=ups.filter(u=>u.t&&hm2min(u.t)>=720);
@@ -2285,11 +2319,13 @@ function exportICS(scope){
     evs=S.events.filter(e=>e.status!=="cancel"&&(scope==="all"||e.date.startsWith(ym))).concat(_virtEvs());
     if(!evs.length){toast("내보낼 일정 없음");return;}
   }
-  let ics="BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//wonnae//KR\r\nCALSCALE:GREGORIAN\r\n";
+  let ics="BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//wonnae//dashboard//KR\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\n";
+  /* iOS 캘린더가 로컬시각을 정확히 잡도록 서울 타임존 정의 (KST 고정, DST 없음) */
+  ics+="BEGIN:VTIMEZONE\r\nTZID:Asia/Seoul\r\nBEGIN:STANDARD\r\nDTSTART:19700101T000000\r\nTZOFFSETFROM:+0900\r\nTZOFFSETTO:+0900\r\nTZNAME:KST\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\n";
   const stamp=new Date().toISOString().replace(/[-:]/g,"").slice(0,15)+"Z";
   evs.forEach(e=>{
     const d=e.date.replace(/-/g,"");
-    ics+="BEGIN:VEVENT\r\nUID:"+e.id+"@wonnae\r\nDTSTAMP:"+stamp+"\r\n";
+    ics+="BEGIN:VEVENT\r\nUID:"+(e._virt?"v":"e")+String(e.id)+"-"+e.date.replace(/-/g,"")+"@wonnae\r\nDTSTAMP:"+stamp+"\r\n";
     const isHoli=/공휴일|절$|성탄|신정|설날|추석|어린이날|부처님|현충일|개천절|한글날/.test(e.title);
     let startM=null,endM=null,allDay=false;
     if(e.span==="full"){ if(isHoli)allDay=true; else{startM=540;endM=1020;} } /* 하루종일 진료 09~17 */
@@ -2302,7 +2338,7 @@ function exportICS(scope){
       ics+=`DTSTART;VALUE=DATE:${d}\r\nDTEND;VALUE=DATE:${ymd(nd).replace(/-/g,"")}\r\n`;
     }else{
       const fmt=m=>String(Math.floor(m/60)).padStart(2,"0")+String(m%60).padStart(2,"0")+"00";
-      ics+=`DTSTART:${d}T${fmt(startM)}\r\nDTEND:${d}T${fmt(endM)}\r\n`;
+      ics+=`DTSTART;TZID=Asia/Seoul:${d}T${fmt(startM)}\r\nDTEND;TZID=Asia/Seoul:${d}T${fmt(endM)}\r\n`;
     }
     /* 제목: 앞에 쓴 시간 그대로 유지 (예: 1400 소치 토탈) */
     const tpref=e.time?e.time.replace(":","")+" ":"";
@@ -2311,26 +2347,39 @@ function exportICS(scope){
     ics+="END:VEVENT\r\n";
   });
   ics+="END:VCALENDAR\r\n";
+  /* RFC5545 라인 폴딩 — 75옥텟(UTF-8 바이트) 초과 줄은 접어야 iOS 파서가 안전하게 읽음 */
+  ics=ics.split("\r\n").map(line=>{
+    if(new Blob([line]).size<=74)return line;
+    let out="",cur="",bytes=0;
+    for(const ch of line){
+      const b=new Blob([ch]).size;
+      if(bytes+b>73){out+=(out?"\r\n ":"")+cur;cur=ch;bytes=b;}
+      else{cur+=ch;bytes+=b;}
+    }
+    out+=(out?"\r\n ":"")+cur;return out;
+  }).join("\r\n");
   /* 저장(조용히) + 다운로드 다이얼로그 */
   S.lastExport=Date.now();save();
   const fname=`원내생일정_${scope==="all"?"전체":scope==="delta"?"변경분":scope==="future"?ym+"부터":ym}.ics`;
-  /* base64 데이터 URI (UTF-8 안전) — 모바일에서 캘린더 앱으로 바로 열림 */
+  /* iOS Safari는 data: URI를 새 탭으로 열면 빈 창에서 멈춤 → Blob URL(파일 취급)로 다운로드해야 캘린더 앱으로 넘어감 */
+  let blobUrl="";
+  try{
+    const blob=new Blob([ics],{type:"text/calendar;charset=utf-8"});
+    if(window._icsBlobUrl)URL.revokeObjectURL(window._icsBlobUrl);
+    window._icsBlobUrl=blobUrl=URL.createObjectURL(blob);
+  }catch(e){}
   let dataUri;
   try{ dataUri="data:text/calendar;charset=utf-8;base64,"+btoa(unescape(encodeURIComponent(ics))); }
   catch(e){ dataUri="data:text/calendar;charset=utf-8,"+encodeURIComponent(ics); }
-  const openLink=document.getElementById("ics-open");
-  openLink.href=dataUri;
+  window._icsFname=fname; window._icsData=ics; window._icsUri=blobUrl||dataUri;
+  /* 다운로드 버튼(a) 모두 Blob URL + download 로 통일 (PC·모바일 공통) */
   const dl=document.getElementById("ics-dl");
-  try{
-    const blob=new Blob([ics],{type:"text/calendar;charset=utf-8"});
-    if(dl._url)URL.revokeObjectURL(dl._url);
-    dl._url=URL.createObjectURL(blob);
-    dl.href=dl._url;dl.download=fname;
-  }catch(e){ dl.href=dataUri;dl.download=fname; }
+  dl.href=blobUrl||dataUri;dl.download=fname;
+  const openLink=document.getElementById("ics-open");
+  openLink.href=blobUrl||dataUri;openLink.download=fname;openLink.removeAttribute("target");
   document.getElementById("ics-text").value=ics;
   document.getElementById("ics-count").textContent=`(${evs.length}건)`;
   window._lastICS=ics;
-  window._icsFname=fname;window._icsData=ics;window._icsUri=(dl&&dl._url)||dataUri;
   document.getElementById("ics-dlg").showModal();
 }
 /* 📲 .ics 파일 공유 — iOS는 Web Share가 캘린더 앱 인식에 가장 안정적 */
@@ -2703,7 +2752,7 @@ function renderTotals(){
   }
   /* 항목(item) 목록 — 현재 과 필터 범위 기준 */
   const scoped=(!tcDeptFilter||tcDeptFilter.size===0)?S.totals.slice():S.totals.filter(t=>tcDeptFilter.has(t.dept));
-  const itemList=[...new Set(scoped.filter(t=>!t.done).map(t=>(t.item||"").trim()).filter(Boolean))].sort();
+  const itemList=[...new Set(scoped.map(t=>(t.item||"").trim()).filter(Boolean))].sort();
   if(tcItemFilter&&!itemList.includes(tcItemFilter))tcItemFilter=null;
   let sortHtml="";
   if(scoped.filter(t=>!t.done).length>1){
@@ -2799,8 +2848,8 @@ function toggleVisit(id,i){
   }else{
     askDate(`${esc(t.pt)} — ${i+1}번째 visit 날짜`,ymd(new Date()),d=>{
       t.visits[i]=d;t.visits=t.visits.filter(Boolean).sort();
-      if(t.next===d){t.next="";t.nextT="";t.nextU=Date.now();}   /* 다녀온 날짜는 해제 */
-      if(t.visits.length>=t.need){t.next="";t.nextT="";t.nextU=Date.now();}
+      if(t.next===d){t.next="";t.nextT="";t.nextHidden=false;t.nextU=Date.now();}   /* 다녀온 날짜는 해제 */
+      if(t.visits.length>=t.need){t.next="";t.nextT="";t.nextHidden=false;t.nextU=Date.now();}
       save();syncTotals();toast(`${i+1}번째 visit 기록됨`);
       if((TOTAL_CFG[t.dept]||{}).tags)openVisitDlg(id,d);   /* 바로 항목 체크 */});
   }
@@ -2829,11 +2878,34 @@ let ocsHideLocked=false; /* true=교수님·회색(🔒) 행 숨김 (뷰 옵션)
 function ocsDeptPick(dep){ocsDeptFilter=(ocsDeptFilter===dep?null:dep);renderOcsDay();}
 function ocsToggleLocked(){ocsHideLocked=!ocsHideLocked;renderOcsDay();}
 function ocsHiKey(u){return (u.d||"")+"|"+(u.t||"")+"|"+(u.no||"")+"|"+(u.dep||"");}
-function ocsHiToggle(key){S.ocsHi=S.ocsHi||{};if(S.ocsHi[key])delete S.ocsHi[key];else S.ocsHi[key]=1;save(1);
-  /* 열린 서브탭 기준으로 갱신 — 하이라이트 탭에서 해제하면 목록에서 바로 빠지게 */
-  try{const pill=document.querySelector("#ocs-pills button.on");const o=pill?pill.dataset.o:"day";
-    if(o==="hl")renderOcsHl();else renderOcsDay();
-  }catch(e){try{renderOcsDay();}catch(_){}}}
+function ocsHiToggle(key){
+  S.ocsHi=S.ocsHi||{};
+  const on=!S.ocsHi[key];
+  if(on)S.ocsHi[key]=1;else delete S.ocsHi[key];
+  save(1);
+  /* 하이라이트 탭이 열려 있으면 목록 자체가 바뀌므로 그때만 전체 갱신 */
+  try{const pill=document.querySelector("#ocs-pills button.on");
+    if(pill&&pill.dataset.o==="hl"){renderOcsHl();return;}
+  }catch(e){}
+  /* 당일 뷰에서는 재렌더 없이 그 줄만 즉시 칠하기 — 펼쳐둔 과 패널이 닫히지 않도록 */
+  let touched=false;
+  try{
+    const sel='button[data-k="'+((window.CSS&&CSS.escape)?CSS.escape(key):key)+'"]';
+    document.querySelectorAll(sel).forEach(btn=>{
+      touched=true;
+      btn.classList.toggle("on",on);
+      const tr=btn.closest("tr");
+      if(tr){
+        tr.classList.toggle("ocs-hi",on);
+        /* border-collapse에서 tr 배경이 무시될 수 있어 각 td에도 직접 지정 */
+        const HL="#FFF6D6";
+        tr.querySelectorAll("td").forEach(td=>{td.style.background=on?HL:"";});
+        if(on)tr.style.opacity="1";else tr.style.opacity="";
+      }
+    });
+  }catch(e){}
+  if(!touched){try{renderOcsDay();}catch(e){}}
+}
 function ocsMove(d){const b=ocsDate?new Date(ocsDate+"T00:00"):new Date();b.setDate(b.getDate()+d);ocsDate=ymd(b);renderOcs();}
 function ocsReset(){ocsDate=null;renderOcs();}
 const WALKIN_DEPTS=["소치","보존","치주","보철","내과","외과","교정"];
@@ -3382,7 +3454,7 @@ function renderOcsHl(){
       <td><b>${esc(u.pt||"")}</b>${mine?" <b style='color:var(--purple)'>◇</b>":""}</td>
       <td>${u._gone?'<span style="color:var(--sub)">— 원본 정리됨</span>':esc(u.cat||"—")}</td>
       <td style="color:var(--sub)">${esc(u.dr||"")}</td>
-      <td style="padding:1px 2px;width:22px"><button class="ocs-hi-btn on" onclick="ocsHiToggle('${k.replace(/'/g,"\\'")}')" title="하이라이트 해제">🖍️</button></td></tr>`;
+      <td style="padding:1px 2px;width:22px"><button class="ocs-hi-btn on" data-k="${esc(k)}" onclick="ocsHiToggle('${k.replace(/'/g,"\\'")}')" title="하이라이트 해제">🖍️</button></td></tr>`;
     }).join("")}</table></details>`;
   }).join("");
 }
@@ -3427,7 +3499,7 @@ function renderOcsDay(){
       return `<button class="ocs-chip${on?" on":""}" style="${on?`background:${col};color:${txtOn(col)};border-color:${col}`:`color:${col};border-color:${col}`}" onclick="ocsDeptPick('${dp}')">${dp} ${cnt}</button>`;};
     const chips=`<button class="ocs-chip${ocsDeptFilter?"":" on"}" style="${ocsDeptFilter?"":"background:var(--brand);color:#fff;border-color:var(--brand)"}" onclick="ocsDeptPick(null)">전체 ${raw.length}</button>`+allDeps.map(chip).join("");
     const row=u=>{const acc=accessOf(u);const mine=MSg.has(u);const hk=ocsHiKey(u);const hi=!!(S.ocsHi&&S.ocsHi[hk]);
-      const hiBtn=`<button class="ocs-hi-btn${hi?" on":""}" onclick="ocsHiToggle('${hk.replace(/'/g,"\\'")}')" title="이 줄 하이라이트">🖍️</button>`;
+      const hiBtn=`<button class="ocs-hi-btn${hi?" on":""}" data-k="${esc(hk)}" onclick="ocsHiToggle('${hk.replace(/'/g,"\\'")}')" title="이 줄 하이라이트">🖍️</button>`;
       if(acc==="resv"&&!mine){
         return `<tr class="${hi?"ocs-hi":""}" style="${hi?"":"opacity:.35;"}font-size:10.5px;color:var(--sub);line-height:1.15"><td style="padding:1px 4px">${u.t||"?"}</td><td style="padding:1px 4px">${esc(u.pt)}</td><td style="padding:1px 4px">🔒 ${esc(u.cat||"—")}</td><td style="padding:1px 4px">${esc(u.dr||"")}</td><td style="padding:1px 2px;width:22px">${hiBtn}</td></tr>`;
       }
@@ -3446,8 +3518,10 @@ function renderOcsDay(){
         /* 교수님·회색 숨김이 켜지면 잠긴 행 제외(단 내 토탈 환자는 유지). 교정은 전체 유지 */
         const Lshown=(ocsHideLocked&&dep!=="교정")?L.filter(u=>accessOf(u)==="resi"||MSg.has(u)||(S.ocsHi&&S.ocsHi[ocsHiKey(u)])):L;
         if(!Lshown.length)return "";
-        return `<details open style="margin-top:6px"><summary style="font-size:12.5px;font-weight:800;cursor:pointer"><span class="dept-tag" style="background:${DEPT_COLOR[dep]||"#666"};color:${txtOn(DEPT_COLOR[dep]||"#666")}">${dep}</span> <b style="font-size:14.5px">${cnt}건</b>${dep==="교정"?` <span style="font-size:10px;color:var(--brand)">⭐교수포함</span>`:""} <span style="font-weight:600;color:var(--sub)">(오전 ${am} · 오후 ${pm})</span>${lockN&&dep!=="교정"?` <span style="color:var(--sub);font-size:10.5px">🔒${lockN}</span>`:""}${mineN?` · <b style="color:var(--purple)">◇${mineN}</b>`:""}</summary>
-        <table class="rtable otbl" style="font-size:11.5px">${Lshown.map(row).join("")}</table></details>`;}).join("")}
+        /* 과가 많으면 기본 접힘(스크롤 절약) — 내 토탈 환자가 있는 과·필터로 한 과만 볼 땐 자동 펼침 */
+        const autoOpen=(mineN>0)||shownDeps.length<=2;
+        return `<details id="obk-${dep}"${autoOpen?" open":""} style="margin-top:6px"><summary style="font-size:12.5px;font-weight:800;cursor:pointer"><span class="dept-tag" style="background:${DEPT_COLOR[dep]||"#666"};color:${txtOn(DEPT_COLOR[dep]||"#666")}">${dep}</span> <b style="font-size:14.5px">${cnt}건</b>${dep==="교정"?` <span style="font-size:10px;color:var(--brand)">⭐교수포함</span>`:""} <span style="font-weight:600;color:var(--sub)">(오전 ${am} · 오후 ${pm})</span>${lockN&&dep!=="교정"?` <span style="color:var(--sub);font-size:10.5px">🔒${lockN}</span>`:""}${mineN?` · <b style="color:var(--purple)">◇${mineN}</b>`:""}</summary>
+        <div style="max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch"><table class="rtable otbl" style="font-size:11.5px">${Lshown.map(row).join("")}</table></div></details>`;}).join("")}
     </div>`;
   }else{
     bd=`<div class="card"><h2>이 날 OCS</h2><p class="hint">이 날짜 데이터가 없어요 — 위 <b>📥 OCS 붙여넣기</b>에 그날 OCS 행들을 넣어주세요.</p></div>`;
@@ -3917,7 +3991,7 @@ function toggleSeen(tid,idx,val){
   e.seen=newVal;
   if(newVal==="o"&&!t.visits.includes(e.d)){  /* ✅봤음 → visit 자동 기록 (유폴 D-7 연동) */
     t.visits.push(e.d);t.visits=t.visits.filter(Boolean).sort();
-    if(t.next===e.d){t.next="";t.nextT="";t.nextU=Date.now();}
+    if(t.next===e.d){t.next="";t.nextT="";t.nextHidden=false;t.nextU=Date.now();}
     if(t.visits.length>=t.need){t.next="";t.nextT="";t.nextU=Date.now();}
     toast(`✅ ${fmtD(e.d)} visit에 기록됨 (${t.visits.length}/${t.need})`);
   }else if(hadO&&newVal!=="o"&&t.visits.includes(e.d)){
